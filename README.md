@@ -1,20 +1,26 @@
 # Swarm Attack
 
-A playable third-person horde slasher set in **Hollow Wake**, a ruined gothic courtyard. The default camera has a classic isometric action-RPG feel. An over-the-shoulder camera is also available.
+A third-person gothic slasher with classic isometric and over-the-shoulder cameras. **Level I: Hollow Wake** is a complete exploration level with authored encounters and an ending.
 
-## Play and develop
+## Play
 
-The game is a static website. It has no build step, account requirement, or server API. Three.js is vendored locally, including its MIT license, so gameplay does not depend on a CDN.
+[Open the playable game](https://hollow-wake.kenneth-kleveta.chatgpt.site).
 
-From this repository, run:
+To run a local copy:
 
 ```sh
 python3 -m http.server 8000
 ```
 
-Open `http://localhost:8000`. Edit the source files and reload. Use an HTTP server; JavaScript modules do not work reliably when opening the HTML as a local file.
+Open `http://localhost:8000`. Edit the files and reload. There is no build step. The root entry also supports GitHub Pages configured to serve `main` from the repository root; this does not automatically enable Pages.
 
-The root entry also works with GitHub Pages configured to serve `main` from the repository root. The existence of this entry does not enable Pages automatically.
+## Level I
+
+Explore Pilgrim’s Gate, the Forgotten Graves, Ash Market, Mourning Bridge, the Broken Cloister, and Bell Sanctuary. Recover the grave and ash wards in either order to open the cloister gate. Reach the shrine checkpoint, defeat the Bellkeeper, and seal the breach.
+
+The level occupies a 92 × 186 unit footprint. Its 53 enemies have fixed starting positions, with selected patrols and proximity-based encounters. Defeated enemies stay defeated during the run. There are no timed waves or swarm announcements.
+
+See [the level and enemy-placement guide](LEVEL-01.md) for encounter counts, patrols, progression, and exact coordinates.
 
 ## Controls
 
@@ -29,40 +35,45 @@ The root entry also works with GitHub Pages configured to serve `main` from the 
 | Sprint | Shift while moving | — |
 | Swap melee / ranged | F or weapon bar | Weapon bar |
 | Heal | E | Heal |
+| Take a ward / use shrine / seal breach | G when the prompt appears | Tap the prompt |
 | Camera | V or camera button | Camera button |
 | Rotate isometric view | R | — |
+| Navigation map | M | Map button |
 | Pause and change loadout | P, Escape, or pause button | Pause button |
 
-## Implemented
+## Weapons and combat
 
-- Third-person isometric and shoulder cameras, animated 3D characters, a gothic stone arena, light, fog, torch flames, hit effects, and synthesized combat audio.
-- Longsword, battle axe, iron mace, and war club, each with different reach, damage, speed, and stamina costs.
-- Longbow, crossbow, and sling with simulated projectiles, ammunition, and headshot bonuses. There are no firearms.
-- Slow zombie swarms, fast flanking demons, and large monsters with telegraphed attacks. Brutes appear starting with horde 2.
-- Escalating hordes, score, kills, pickups, healing, blocking, dodging, stamina recovery, death, restart, and seven-second recovery periods between hordes.
-- Desktop and touch controls. The game pauses when focus is lost.
+- Longsword, battle axe, iron mace, and war club have different reach, damage, speed, and stamina costs.
+- Longbow, crossbow, and sling fire simulated arrows, bolts, and stones. No firearms.
+- Zombies guard and shamble, demons patrol and flank, and monsters telegraph heavy attacks. The Bellkeeper guards the final sanctuary and becomes faster below half health.
+- Supply caches and ward recovery replenish resources. The cloister shrine is a checkpoint. Returning after death preserves collected wards and defeated enemies while restoring surviving enemies to their home positions and full health.
+- A completed level stops combat and shows the result screen. Replay starts the original level again.
 
-## Where to make changes
+## Editing
 
 | File | Responsibility |
 | --- | --- |
-| `dist/core.mjs` | Weapon and enemy values, spawning, movement, collision, combat, projectiles, pickups, and wave progression. Pure JavaScript, independent of rendering. |
-| `dist/game.js` | 3D models and world, cameras, animations, audio, controls, HUD, and menus. |
-| `dist/style.css` | Responsive interface and the gothic visual theme. |
-| `dist/index.html` | Game page, title, icon, and local entry points. |
-| `tests/core.test.mjs` | Regression checks for the combat simulation. |
-| `TESTING.md` | Manual desktop and touch checks. |
+| `dist/level.mjs` | Room layout, walkable areas, collision, gates, patrols, enemy placements, objective positions, supplies, and navigation. |
+| `dist/core.mjs` | Combat simulation, awareness, pursuit, resource rules, objectives, checkpoint recovery, and completion. |
+| `dist/world.js` | The rendered environment, ruins, tombs, market stalls, bridge, shrine, gate, and breach. |
+| `dist/game.js` | Character models, weapons, cameras, animation, sound, controls, HUD, map, and menus. |
+| `dist/style.css` | Responsive interface. |
+| `tests/core.test.mjs` | Combat regression tests. |
+| `tests/level.test.mjs` | Navigation and level-progression regression tests. |
+| `TESTING.md` | Browser and device acceptance checks. |
 
-## Checks
+## Verify changes
 
 ```sh
 node --check dist/game.js
+node --check dist/world.js
 node --check dist/core.mjs
-node --test tests/core.test.mjs
+node --check dist/level.mjs
+node --test tests/*.test.mjs
 ```
 
-Keep changes small and describe the gameplay effect in commit messages. The weapon and enemy constants at the top of `core.mjs` are the quickest place to adjust balance.
+The 26 automated tests cover combat, authored placements, patrols, gate collision, both ward orders, checkpoint recovery, the traversable level route, and completion. They do not measure browser rendering, device performance, or combat balance.
 
 ## Dependencies
 
-Three.js 0.180.0 is included in `dist/three.module.js` and `dist/three.core.js`. Its license is preserved in `dist/THREE-LICENSE.txt`. The arena, characters, weapons, sound effects, and interface are created in code. No Diablo assets are included.
+Three.js 0.180.0 is vendored locally in `dist/three.module.js` and `dist/three.core.js`; its MIT license is preserved in `dist/THREE-LICENSE.txt`. The environment, characters, weapons, effects, and interface are original code-built assets. No Diablo assets are included.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {HordeGame,RANGED} from '../dist/core.mjs';
 
-function arena(){const g=new HordeGame(()=>.8);g.start();g.spawnQueue=[];g.waveTotal=10;g.player.x=0;g.player.z=5;g.player.yaw=0;g.takeEvents();return g;}
+function arena(){const g=new HordeGame(()=>.8);g.reset();g.player.x=0;g.player.z=5;g.player.yaw=0;g.takeEvents();return g;}
 function tick(g,seconds,input={}){for(let t=0;t<seconds;t+=.02)g.step(.02,input);}
 function target(g,type='zombie',x=0,z=2){const e=g.spawn(type,x,z);e.state='recover';e.timer=100;return e;}
 
@@ -30,16 +30,12 @@ test('dodge grants brief immunity, moves the player, and respects stamina',()=>{
   const g=arena();target(g,'zombie',10,10);assert.equal(g.dodge(1,0),true);g.hurtPlayer(50,{x:0,z:0});assert.equal(g.player.hp,100);tick(g,.5);assert.ok(g.player.x>3);
   g.hurtPlayer(20,{x:0,z:0});assert.equal(g.player.hp,80);g.player.stamina=0;g.player.dodgeCooldown=0;assert.equal(g.dodge(),false);
 });
-test('a cleared horde replenishes resources and starts the next wave',()=>{
-  const g=arena();g.player.hp=50;g.player.ammo.bow=0;g.step(.02);assert.ok(g.intermission>6);assert.equal(g.player.hp,75);assert.equal(g.player.ammo.bow,12);
-  tick(g,7.1);assert.equal(g.wave,2);assert.ok(g.spawnQueue.includes('monster'));assert.ok(g.spawnQueue.length>0);
-});
 test('pausing freezes simulation and a lethal hit ends the run',()=>{
   const g=arena();g.mode='paused';const before=g.elapsed;g.step(.05,{x:1,z:0});assert.equal(g.elapsed,before);assert.equal(g.player.x,0);
   g.mode='playing';g.hurtPlayer(120,{x:0,z:0});assert.equal(g.mode,'dead');assert.equal(g.player.hp,0);
 });
 test('reset clears pending strikes, enemies, score, and spent resources',()=>{
-  const g=arena();target(g);g.attack();g.score=100;g.player.heal=0;g.start();assert.equal(g.pendingSwing,null);assert.equal(g.enemies.length,0);assert.equal(g.score,0);assert.equal(g.player.heal,3);
+  const g=arena();target(g);g.attack();g.score=100;g.player.heal=0;g.start();assert.equal(g.pendingSwing,null);assert.equal(g.enemies.length,53);assert.equal(g.score,0);assert.equal(g.player.heal,3);
 });
 test('enemy windup is readable and causes damage only after the windup',()=>{
   const g=arena(),e=target(g,'zombie',0,3.6);e.state='chase';g.step(.02);assert.equal(e.state,'windup');assert.equal(g.player.hp,100);tick(g,.9);assert.ok(g.player.hp<100);

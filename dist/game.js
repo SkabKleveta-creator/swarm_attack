@@ -1,5 +1,7 @@
 import * as THREE from './three.module.js';
-import {HordeGame,MELEE,RANGED,ENEMIES,OBSTACLES,clamp,toward,angleDiff} from './core.mjs';
+import {HordeGame,MELEE,RANGED,ENEMIES,clamp,toward,angleDiff} from './core.mjs';
+import {LEVEL,WALKABLE,ENCOUNTERS,zoneAt,clearLine} from './level.mjs';
+import {buildLevel} from './world.js';
 
 const $=id=>document.getElementById(id);
 const isTouch=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>1;
@@ -7,23 +9,24 @@ if(isTouch)document.body.classList.add('touch');
 const game=new HordeGame();
 let view='isometric',muted=false,started=false,menu='ready',pitch=-.06,isoYaw=Math.PI/4;
 let renderer,scene,camera,isoCamera,shoulderCamera,playerModel;
-let clock=0,shake=0,flash=0,last=0,hudTime=0,toastUntil=0,announceUntil=0,hitPause=0;
+let clock=0,shake=0,flash=0,last=0,hudTime=0,toastUntil=0,hitPause=0;
 let walkTime=0,locked=false,dragLook=false,mouseKnown=false;
 let lookPointerId=null,touchLookX=0,touchLookY=0;
 const keys=new Set(),mouse=new THREE.Vector2(0,0),raycaster=new THREE.Raycaster(),groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
 const input={attack:false,guard:false,joyX:0,joyY:0},actors=new Map(),shotMeshes=new Map(),pickupMeshes=new Map(),effects=[],damageLabels=[];
-const torchFlames=[],occluders=[],decoActors=[];
+const torchFlames=[],occluders=[];
+let levelWorld,moonLight,mapVisible=true;
 let listenerReady=false,audioContext,master;
 
 const html=`
 <div class="vignette"></div><div class="damage-screen" id="damage-screen"></div>
 <div id="hud" hidden>
-  <div class="top"><div class="brand">SWARM ATTACK<small>HOLLOW WAKE</small></div>
-    <div class="wave-box"><div class="wave-title">HORDE</div><div class="wave-number" id="wave">01</div><div class="wave-track"><i id="wave-progress"></i></div><div class="remaining" id="remaining">The gates are opening</div></div>
-    <div class="top-right"><button class="small-button" id="view-button" aria-label="Switch camera view" title="Switch camera · V">ISO</button><button class="small-button" id="sound-button" aria-label="Toggle sound">SOUND</button><button class="small-button" id="pause-button" aria-label="Pause game">II</button></div>
+  <div class="top"><div class="brand">SWARM ATTACK<small id="area-name">PILGRIM’S GATE</small></div>
+    <div class="objective-box"><span>LEVEL I · HOLLOW WAKE</span><strong id="objective">Recover the two ward seals · 0/2</strong></div>
+    <div class="top-right"><button class="small-button" id="map-button" aria-label="Toggle navigation map">MAP</button><button class="small-button" id="view-button" aria-label="Switch camera view" title="Switch camera · V">ISO</button><button class="small-button" id="sound-button" aria-label="Toggle sound">SOUND</button><button class="small-button" id="pause-button" aria-label="Pause game">II</button></div>
   </div>
   <div id="crosshair" class="crosshair"></div><div id="enemy-labels"></div><div id="damage-labels"></div>
-  <div class="announcement" id="announcement"><strong id="announce-title"></strong><span id="announce-sub"></span></div>
+  <div class="map-frame" id="map-frame"><canvas id="minimap" width="190" height="230" aria-label="Level navigation map"></canvas><div>YOU · WARDS · BREACH</div></div><div class="boss-bar" id="boss-bar" hidden><span>THE BELLKEEPER</span><div><i id="boss-health"></i></div></div><button class="interact-prompt" id="interact-prompt" hidden></button>
   <div class="toast" id="toast" role="status"></div>
   <div class="score"><span id="score">0</span><small id="kills">0 SLAIN</small></div>
   <div class="bottom">
@@ -36,13 +39,13 @@ const html=`
   <div class="touch-controls"><div class="joystick" id="joystick" aria-label="Movement joystick"><div class="stick" id="stick"></div></div><button class="small-button touch-heal" id="touch-heal">HEAL · 3</button><div class="touch-actions"><button class="touch-button heavy" id="touch-heavy">HEAVY</button><button class="touch-button guard" id="touch-guard">GUARD</button><button class="touch-button dodge" id="touch-dodge">DODGE</button><button class="touch-button attack" id="touch-attack">SLASH</button></div></div>
 </div>
 <div class="panel-screen" id="menu-screen"><section class="panel" aria-labelledby="menu-title">
-  <p class="eyebrow" id="menu-eyebrow">HOLLOW WAKE · HORDE SURVIVAL</p><h1 id="menu-title">SWARM ATTACK</h1>
-  <p class="panel-description" id="menu-description">Zombies. Demons. Monsters.</p>
+  <p class="eyebrow" id="menu-eyebrow">LEVEL I · HOLLOW WAKE</p><h1 id="menu-title">SWARM ATTACK</h1>
+  <p class="panel-description" id="menu-description">Recover two ward seals, reach the bell sanctuary,<br>and close the breach.</p>
   <div class="results" id="results" hidden></div>
   <div id="loadout"><div class="divider"></div><p class="section-label">MELEE WEAPON</p><div class="weapon-choices" id="melee-choices"></div><p class="weapon-detail" id="melee-detail"></p><p class="section-label">RANGED WEAPON</p><div class="weapon-choices ranged" id="ranged-choices"></div><p class="weapon-detail" id="ranged-detail"></p><p class="section-label">THIRD-PERSON CAMERA</p><div class="camera-choices"><button class="choice selected" data-view="isometric">Classic isometric</button><button class="choice" data-view="shoulder">Over the shoulder</button></div></div>
   <button class="primary" id="begin">ENTER THE RUINS</button>
-  <p class="controls-copy controls-desktop"><strong>WASD</strong> move · <strong>Mouse</strong> aim · <strong>Click</strong> attack · <strong>F</strong> swap<br><strong>Q</strong> heavy · <strong>Space</strong> dodge · <strong>Right click</strong> guard / aim · <strong>E</strong> heal</p>
-  <p class="controls-copy controls-touch">Left stick to move. Attack faces nearby enemies.<br>In shoulder view, drag the scene to look.</p>
+  <p class="controls-copy controls-desktop"><strong>WASD</strong> move · <strong>Mouse</strong> aim · <strong>Click</strong> attack · <strong>F</strong> swap<br><strong>Q</strong> heavy · <strong>Space</strong> dodge · <strong>E</strong> heal · <strong>G</strong> interact</p>
+  <p class="controls-copy controls-touch">Left stick to move. Attack faces nearby enemies.<br>Tap the prompt to collect wards. Drag to look in shoulder view.</p>
   <div class="panel-footer"><button class="text-button" id="menu-sound">Sound on</button><button class="text-button" id="restart" hidden>Restart run</button></div>
 </section></div>`;
 $('interface').innerHTML=html;
@@ -51,7 +54,6 @@ for(const [id,list]of[['melee',MELEE],['ranged',RANGED]]){
 }
 
 function toast(s){$('toast').textContent=s;$('toast').classList.add('visible');toastUntil=clock+2.2;}
-function announce(title,sub='',seconds=2.8){$('announce-title').textContent=title;$('announce-sub').textContent=sub;$('announcement').classList.add('visible');announceUntil=clock+seconds;}
 function refreshLoadout(){
   document.querySelectorAll('[data-melee]').forEach(b=>b.classList.toggle('selected',b.dataset.melee===game.melee));
   document.querySelectorAll('[data-ranged]').forEach(b=>b.classList.toggle('selected',b.dataset.ranged===game.ranged));
@@ -66,7 +68,7 @@ function initAudio(){
 }
 function sound(type){
   if(!audioContext||muted)return;const ac=audioContext,t=ac.currentTime;
-  const data={swing:[180,70,.12,'triangle',.34],impact:[93,32,.17,'sawtooth',.3],shoot:[360,130,.09,'triangle',.4],hurt:[70,30,.24,'sawtooth',.35],block:[520,120,.16,'square',.16],dodge:[110,180,.1,'triangle',.2],heal:[370,740,.35,'sine',.3],wave:[90,125,.7,'triangle',.25],kill:[90,30,.12,'sawtooth',.16],clear:[330,660,.45,'sine',.32],equip:[300,220,.055,'triangle',.14]}[type];
+  const data={swing:[180,70,.12,'triangle',.34],impact:[93,32,.17,'sawtooth',.3],shoot:[360,130,.09,'triangle',.4],hurt:[70,30,.24,'sawtooth',.35],block:[520,120,.16,'square',.16],dodge:[110,180,.1,'triangle',.2],heal:[370,740,.35,'sine',.3],kill:[90,30,.12,'sawtooth',.16],clear:[330,660,.45,'sine',.32],equip:[300,220,.055,'triangle',.14]}[type];
   if(!data)return;const o=ac.createOscillator(),g=ac.createGain();o.type=data[3];o.frequency.setValueAtTime(data[0],t);o.frequency.exponentialRampToValueAtTime(data[1],t+data[2]);g.gain.setValueAtTime(data[4],t);g.gain.exponentialRampToValueAtTime(.001,t+data[2]);o.connect(g);g.connect(master);o.start(t);o.stop(t+data[2]);
 }
 
@@ -170,55 +172,13 @@ function floorTexture(){
   const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(8,8);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=4;return t;
 }
 function makeWorld(){
-  scene=new THREE.Scene();scene.background=new THREE.Color(0x10191b);scene.fog=new THREE.FogExp2(0x18201c,.014);
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x10191b);scene.fog=new THREE.FogExp2(0x18201c,.019);
   scene.add(new THREE.HemisphereLight(0xa3b5ad,0x353020,1.85));
-  const moon=new THREE.DirectionalLight(0xb8c6c4,3.05);moon.position.set(-10,24,-15);moon.castShadow=!isTouch;moon.shadow.mapSize.set(1536,1536);moon.shadow.camera.left=-28;moon.shadow.camera.right=28;moon.shadow.camera.top=28;moon.shadow.camera.bottom=-28;moon.shadow.bias=-.001;scene.add(moon);
+  moonLight=new THREE.DirectionalLight(0xb8c6c4,3.05);moonLight.position.set(-10,24,-15);moonLight.castShadow=!isTouch;moonLight.shadow.mapSize.set(1536,1536);Object.assign(moonLight.shadow.camera,{left:-24,right:24,top:24,bottom:-24,near:1,far:70});moonLight.shadow.bias=-.001;moonLight.shadow.camera.updateProjectionMatrix();scene.add(moonLight,moonLight.target);
   const warm=new THREE.DirectionalLight(0xeb9a58,1.45);warm.position.set(14,10,8);scene.add(warm);
-  const floorMat=new THREE.MeshStandardMaterial({map:floorTexture(),roughness:1,color:0xbac0ac});
-  const floor=mesh(scene,'PlaneGeometry',[47,47],floorMat,0,-.018,0);floor.rotation.x=-Math.PI/2;floor.castShadow=false;
-  const stone=mat('stone',0x515448),trim=mat('trim',0x777665),darkStone=mat('darkStone',0x343d36),iron=mat('iron',0x333634,.65,.45);
-  // An octagonal inlaid seal anchors the play space without blocking movement.
-  for(const r of[3.9,4.3,4.45]){const ring=mesh(scene,'RingGeometry',[r,r+.055,8],mat('seal',0x857047,.35),0,.001,0);ring.rotation.x=-Math.PI/2;}
-  for(let i=0;i<8;i++){const a=i*Math.PI/4;const m=box(scene,mat('seal',0x857047,.35),.085,.018,1,Math.sin(a)*3,.007,Math.cos(a)*3);m.rotation.y=a;}
-  function pillar(x,z,h=3.8){
-    const group=new THREE.Group();group.position.set(x,0,z);scene.add(group);
-    box(group,trim,1.8,.24,1.8,0,.12);box(group,stone,1.5,.3,1.5,0,.37);cyl(group,stone,.53,.64,h,0,.5+h/2,0,8);
-    for(const y of[.75,h+.42])box(group,trim,1.3,.2,1.3,0,y,0);
-    cone(group,darkStone,.9,.55,0,h+.82,0).rotation.y=Math.PI/4;
-    occluders.push(group);return group;
-  }
-  for(const o of OBSTACLES)pillar(o.x,o.z,o.r>1?4.5:2.7);
-  function arch(x,z,rotation=0){
-    const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
-    box(g,stone,.9,4,.85,-2,2);box(g,stone,.9,4,.85,2,2);box(g,trim,1.17,.2,1,2,3.9);box(g,trim,1.17,.2,1,-2,3.9);
-    for(let j=0;j<9;j++){const a=j/8*Math.PI;const b=box(g,j%2?stone:trim,.7,.7,.86,Math.cos(a)*2,4+Math.sin(a)*2);b.rotation.z=a;}
-    occluders.push(g);
-  }
-  for(let i=-2;i<=2;i++){arch(i*5.7,-22.6);arch(-22.6,i*5.7,Math.PI/2);}
-  // Foreground walls stay low so the isometric view keeps the player visible.
-  for(const [x,z,w,d]of[[0,22.4,45,1],[22.4,0,1,45],[-22.4,0,1,45],[0,-22.4,45,1]])box(scene,darkStone,w,1,d,x,.5,z);
-  for(let i=-3;i<=3;i++){box(scene,trim,1.2,1.3,1.2,i*6.6,.65,22.4);box(scene,trim,1.2,1.3,1.2,22.4,.65,i*6.6);}
-  // Ruined sanctuary and distant towers.
-  const cathedral=new THREE.Group();cathedral.position.set(0,0,-28);scene.add(cathedral);
-  box(cathedral,darkStone,10,7.5,1,0,3.75);box(cathedral,stone,1.6,11,3,-6,5.5);box(cathedral,stone,1.6,11,3,6,5.5);
-  cone(cathedral,trim,1.9,5,-6,13.5).rotation.y=Math.PI/4;cone(cathedral,trim,1.9,5,6,13.5).rotation.y=Math.PI/4;
-  const opening=box(cathedral,mat('gate',0x111512),3.2,5.5,.2,0,2.75,.65);
-  for(let i=-3;i<=3;i++)box(cathedral,iron,.06,5.5,.11,i*.43,2.75,.81);
-  const redMoon=ball(scene,new THREE.MeshBasicMaterial({color:0x9c694f}),4,-10,20,-45);redMoon.castShadow=false;
-  function torch(x,z){
-    cyl(scene,iron,.12,.2,1.3,x,.65,z);cyl(scene,iron,.38,.18,.26,x,1.36,z);
-    const f=cone(scene,new THREE.MeshBasicMaterial({color:0xffbb5f,transparent:true,opacity:.92}),.17,.75,x,1.82,z);f.castShadow=false;torchFlames.push(f);
-    const light=new THREE.PointLight(0xff9140,13,7,1.5);light.position.set(x,2,z);scene.add(light);
-  }
-  for(const [x,z]of[[-8,-8],[8,-8],[-8,7],[8,7],[-3,-20],[3,-20]])torch(x,z);
-  let seed=312;const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
-  const rockGeo=geo('DodecahedronGeometry',[1,0]),rockMat=mat('rubble',0x525349),rubble=new THREE.InstancedMesh(rockGeo,rockMat,95),dummy=new THREE.Object3D();
-  for(let i=0;i<95;i++){const a=rand()*Math.PI*2,r=18+rand()*5;dummy.position.set(Math.sin(a)*r,.1,Math.cos(a)*r);dummy.scale.set(.1+rand()*.55,.07+rand()*.4,.15+rand()*.5);dummy.rotation.set(rand(),rand()*6,rand());dummy.updateMatrix();rubble.setMatrixAt(i,dummy.matrix);}scene.add(rubble);rubble.receiveShadow=true;
-  for(let i=0;i<17;i++){const x=(rand()-.5)*39,z=(rand()-.5)*39;const g=new THREE.Group();g.position.set(x,.006,z);scene.add(g);const puddle=mesh(g,'CircleGeometry',[.3+rand()*.6,9],mat('stains',0x353426),0,0,0);puddle.rotation.x=-Math.PI/2;puddle.scale.set(1,.6+rand(),1);puddle.castShadow=false;}
+  levelWorld=buildLevel(scene,{mat,mesh,box,ball,cone,cyl,barBetween,floorTexture,occluders,torchFlames});
   playerModel=actor();scene.add(playerModel.g);equipVisual();
-  for(const [type,x,z]of[['zombie',-3,1],['zombie',5,-2],['demon',-9,-2],['monster',4,-10]]){const m=actor(type);m.g.position.set(x,0,z);scene.add(m.g);decoActors.push(m);}
-  isoCamera=new THREE.OrthographicCamera(-15,15,10,-10,.1,100);shoulderCamera=new THREE.PerspectiveCamera(60,1,.1,110);camera=isoCamera;
-  for(const group of occluders){group.userData.occluder=true;group.traverse(m=>{if(m.isMesh){m.material=m.material.clone();m.material.transparent=true;}});}
+  isoCamera=new THREE.OrthographicCamera(-15,15,10,-10,.1,100);shoulderCamera=new THREE.PerspectiveCamera(60,1,.1,100);camera=isoCamera;
 }
 
 function resize(){
@@ -245,7 +205,7 @@ function updateCamera(dt,force=false){
   if(shake>.01&&!matchMedia('(prefers-reduced-motion:reduce)').matches){camera.position.x+=(Math.random()-.5)*shake;camera.position.y+=(Math.random()-.5)*shake;}
   camera.updateMatrixWorld();
 }
-function nearestEnemy(max=15){let result=null,dist=max;const p=game.player;for(const e of game.enemies){if(e.dead)continue;const d=Math.hypot(e.x-p.x,e.z-p.z);if(d<dist){result=e;dist=d;}}return result;}
+function nearestEnemy(max=15){let result=null,dist=max;const p=game.player;for(const e of game.enemies){if(e.dead||!clearLine(p.x,p.z,e.x,e.z,.05,game.gateOpen))continue;const d=Math.hypot(e.x-p.x,e.z-p.z);if(d<dist){result=e;dist=d;}}return result;}
 const aimGround=new THREE.Vector3();
 function getAim(){
   const p=game.player;
@@ -287,29 +247,65 @@ function switchView(next){
 function toggleSound(){muted=!muted;if(master)master.gain.value=muted?0:.24;$('sound-button').textContent=muted?'MUTED':'SOUND';$('menu-sound').textContent=muted?'Sound off':'Sound on';}
 function openMenu(kind){
   menu=kind;clearInputs();unlock();$('menu-screen').hidden=false;
-  $('menu-title').innerHTML=kind==='dead'?'YOU HAVE<br>FALLEN':kind==='paused'?'TAKE A BREATH':'SWARM ATTACK';
-  $('menu-description').innerHTML=kind==='dead'?'The horde claims another. Your next run starts here.':kind==='paused'?'The horde can wait. Change your weapons or camera.':'Zombies. Demons. Monsters.';
-  $('menu-eyebrow').textContent=kind==='dead'?'HOLLOW WAKE · RUN ENDED':kind==='paused'?'HOLLOW WAKE · PAUSED':'HOLLOW WAKE · HORDE SURVIVAL';
-  $('begin').textContent=kind==='dead'?'RISE AGAIN':kind==='paused'?'RETURN TO THE FIGHT':'ENTER THE RUINS';
-  $('restart').hidden=kind!=='paused';$('results').hidden=kind!=='dead';
-  $('results').innerHTML=`<div><strong>${game.wave}</strong><small>HORDE</small></div><div><strong>${game.kills}</strong><small>SLAIN</small></div><div><strong>${game.score.toLocaleString()}</strong><small>SCORE</small></div>`;
-  refreshLoadout();
+  const complete=kind==='complete',dead=kind==='dead';
+  $('menu-title').innerHTML=complete?'HOLLOW WAKE<br>IS SILENT':dead?'YOU HAVE<br>FALLEN':kind==='paused'?'TAKE A BREATH':'SWARM ATTACK';
+  $('menu-description').innerHTML=complete?'The Bellkeeper is defeated. The breach is sealed.':dead?'Return to '+game.checkpoint.name+'. Collected wards and defeated enemies are preserved.':kind==='paused'?'Change your weapons or camera, then continue exploring.':'Recover two ward seals, reach the bell sanctuary,<br>and close the breach.';
+  $('menu-eyebrow').textContent=complete?'LEVEL I · COMPLETE':dead?'LEVEL I · FALLEN':kind==='paused'?'LEVEL I · PAUSED':'LEVEL I · HOLLOW WAKE';
+  $('begin').textContent=complete?'PLAY LEVEL AGAIN':dead?'RETURN TO CHECKPOINT':kind==='paused'?'CONTINUE EXPLORING':'ENTER HOLLOW WAKE';
+  $('restart').hidden=kind!=='paused'&&!dead;$('restart').textContent='Restart level';$('results').hidden=!dead&&!complete;
+  const minutes=Math.floor(game.elapsed/60),seconds=String(Math.floor(game.elapsed%60)).padStart(2,'0');
+  $('results').innerHTML=`<div><strong>${minutes}:${seconds}</strong><small>TIME</small></div><div><strong>${game.kills}/${ENCOUNTERS.length}</strong><small>SLAIN</small></div><div><strong>${game.score.toLocaleString()}</strong><small>SCORE</small></div>`;
+  $('loadout').hidden=complete;refreshLoadout();
 }
+
 function pause(){if(game.mode==='playing'){game.mode='paused';openMenu('paused');}else if(game.mode==='paused')resume();}
 function resume(){menu=null;game.mode='playing';$('menu-screen').hidden=true;last=performance.now();lock();}
 function startRun(){
-  initAudio();clearInputs();game.start();started=true;menu=null;clock=0;announceUntil=0;toastUntil=0;
+  initAudio();clearInputs();game.start();started=true;menu=null;clock=0;toastUntil=0;
   for(const a of actors.values()){scene.remove(a.g);scene.remove(a.warning);a.warning.geometry.dispose();a.warning.material.dispose();a.label.remove();a.skin.dispose();a.cloth.dispose();a.armor.dispose();}actors.clear();
   for(const m of shotMeshes.values())scene.remove(m);shotMeshes.clear();
   for(const m of pickupMeshes.values())scene.remove(m);pickupMeshes.clear();
   for(const e of effects){scene.remove(e.mesh);e.mesh.geometry?.dispose();e.mesh.material.dispose();}effects.length=0;
   for(const d of damageLabels)d.el.remove();damageLabels.length=0;
-  for(const a of decoActors)a.g.visible=false;
-  $('menu-screen').hidden=true;$('hud').hidden=false;equipVisual();switchView(view);updateCamera(0,true);last=performance.now();lock();
+  $('loadout').hidden=false;handleEvents();
+  $('menu-screen').hidden=true;$('hud').hidden=false;equipVisual();switchView(view);updateCamera(0,true);updateHud();last=performance.now();lock();
+}
+function returnToCheckpoint(){
+  initAudio();clearInputs();game.respawn();menu=null;$('menu-screen').hidden=true;
+  for(const m of shotMeshes.values())scene.remove(m);shotMeshes.clear();
+  for(const d of damageLabels)d.el.remove();damageLabels.length=0;
+  for(const e of effects){scene.remove(e.mesh);e.mesh.geometry.dispose();e.mesh.material.dispose();}effects.length=0;
+  equipVisual();updateCamera(0,true);updateVisuals(.016);updateHud();last=performance.now();lock();
+}
+function toggleMap(){mapVisible=!mapVisible;$('map-frame').hidden=!mapVisible;$('map-button').setAttribute('aria-pressed',String(mapVisible));}
+function updateLevelWorld(){
+  const p=game.player;
+  for(const chunk of levelWorld.chunks)chunk.visible=Math.hypot(chunk.position.x-p.x,chunk.position.z-p.z)<44+chunk.userData.chunkRadius;
+  for(const [id,s]of levelWorld.seals){s.g.visible=!game.seals.has(id)&&Math.hypot(s.g.position.x-p.x,s.g.position.z-p.z)<43;s.ward.rotation.y=clock*.85;s.ward.position.y=1.65+Math.sin(clock*2)*.12;}
+  levelWorld.gate.visible=!game.gateOpen&&Math.hypot(p.x,p.z+56)<48;
+  levelWorld.crystal.rotation.y=clock*.35;levelWorld.portal.rotation.z=clock*.12;
+  levelWorld.portal.material.color.setHex(game.bossDefeated?0x98c6a2:0xb94127);levelWorld.portal.visible=game.mode!=='complete';
+  const nearest=levelWorld.lights.map(l=>({l,d:Math.hypot(l.position.x-p.x,l.position.z-p.z)})).sort((a,b)=>a.d-b.d);
+  nearest.forEach(({l,d},i)=>{l.visible=i<6;l.intensity=12*Math.max(0,1-d/30);});
+  moonLight.position.set(p.x-10,24,p.z-15);moonLight.target.position.set(p.x,0,p.z);moonLight.target.updateMatrixWorld();
+}
+function drawMap(){
+  if(!mapVisible)return;const c=$('minimap'),ctx=c.getContext('2d'),p=game.player,b=LEVEL.bounds;
+  const scale=Math.min((c.width-28)/(b.x2-b.x1),(c.height-24)/(b.z2-b.z1));
+  const ox=(c.width-(b.x2-b.x1)*scale)/2,oz=12,X=x=>ox+(x-b.x1)*scale,Z=z=>oz+(z-b.z1)*scale;
+  ctx.clearRect(0,0,c.width,c.height);ctx.fillStyle='#0c110f';ctx.fillRect(0,0,c.width,c.height);
+  for(const area of WALKABLE){ctx.fillStyle=game.visited.has(area.id)?'#676454':'#292e27';ctx.fillRect(X(area.x1),Z(area.z1),(area.x2-area.x1)*scale,(area.z2-area.z1)*scale);}
+  for(const e of game.enemies){if(e.dead||Math.hypot(e.x-p.x,e.z-p.z)>16||!clearLine(p.x,p.z,e.x,e.z,.05,game.gateOpen))continue;ctx.fillStyle=e.boss?'#ff653f':'#c15a3b';ctx.beginPath();ctx.arc(X(e.x),Z(e.z),e.boss?3:1.6,0,Math.PI*2);ctx.fill();}
+  function diamond(x,z,color,r=3){ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(X(x),Z(z)-r);ctx.lineTo(X(x)+r,Z(z));ctx.lineTo(X(x),Z(z)+r);ctx.lineTo(X(x)-r,Z(z));ctx.closePath();ctx.fill();}
+  for(const seal of LEVEL.seals)if(!game.seals.has(seal.id))diamond(seal.x,seal.z,'#f0bf6c',3.8);
+  diamond(LEVEL.shrine.x,LEVEL.shrine.z,game.shrineReached?'#a4d6ae':'#7d9c8b',3);
+  diamond(LEVEL.exit.x,LEVEL.exit.z,game.bossDefeated?'#a4d6ae':'#ce6b45',4);
+  if(!game.gateOpen){ctx.strokeStyle='#d0a567';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(X(-8),Z(-56));ctx.lineTo(X(8),Z(-56));ctx.stroke();}
+  ctx.save();ctx.translate(X(p.x),Z(p.z));ctx.rotate(p.yaw);ctx.fillStyle='#fff0b8';ctx.beginPath();ctx.moveTo(0,-4.5);ctx.lineTo(3.2,3.5);ctx.lineTo(0,2);ctx.lineTo(-3.2,3.5);ctx.closePath();ctx.fill();ctx.restore();
 }
 function bindInput(){
-  $('begin').onclick=()=>game.mode==='paused'?resume():startRun();$('restart').onclick=startRun;
-  $('pause-button').onclick=pause;$('sound-button').onclick=toggleSound;$('menu-sound').onclick=toggleSound;$('view-button').onclick=()=>switchView();
+  $('begin').onclick=()=>game.mode==='paused'?resume():game.mode==='dead'?returnToCheckpoint():startRun();$('restart').onclick=startRun;
+  $('pause-button').onclick=pause;$('map-button').onclick=toggleMap;$('interact-prompt').onclick=()=>game.interact();$('sound-button').onclick=toggleSound;$('menu-sound').onclick=toggleSound;$('view-button').onclick=()=>switchView();
   $('swap').onclick=()=>game.toggleWeapon();
   $('melee-slot').onclick=()=>{if(game.player.mode!=='melee')game.toggleWeapon();};$('ranged-slot').onclick=()=>{if(game.player.mode!=='ranged')game.toggleWeapon();};
   document.querySelectorAll('[data-melee]').forEach(b=>b.onclick=()=>{game.setLoadout(b.dataset.melee,game.ranged);refreshLoadout();equipVisual();});
@@ -317,9 +313,9 @@ function bindInput(){
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
   document.addEventListener('keydown',e=>{
     if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)&&!menu)e.preventDefault();
-    if(e.code==='Escape'||e.code==='KeyP'){if(started)pause();return;}
+    if(e.code==='Escape'){if(game.mode==='playing')pause();return;}if(e.code==='KeyP'){if(started)pause();return;}
     if(e.repeat)return;if(game.mode!=='playing')return;keys.add(e.code);
-    if(e.code==='KeyF')game.toggleWeapon();if(e.code==='KeyV')switchView();if(e.code==='KeyE')game.heal();
+    if(e.code==='KeyG')game.interact();if(e.code==='KeyM')toggleMap();if(e.code==='KeyF')game.toggleWeapon();if(e.code==='KeyV')switchView();if(e.code==='KeyE')game.heal();
     if(e.code==='Space'){const m=getMovement();game.dodge(m.x,m.z);}
     if(e.code==='KeyQ'){aimPlayer();game.attack(true,getAim());}
     if(e.code==='KeyR'&&view==='isometric'){isoYaw+=Math.PI/2;updateCamera(0,true);}
@@ -377,11 +373,11 @@ function damageNumber(e){
 }
 function handleEvents(){
   for(const e of game.takeEvents()){
-    if(['swing','impact','shoot','hurt','block','dodge','heal','wave','clear','equip'].includes(e.type))sound(e.type);
+    if(['swing','impact','shoot','hurt','block','dodge','heal','equip'].includes(e.type))sound(e.type);
     if(e.type==='spawn'){
-      const a=actor(e.enemy.type);a.enemy=e.enemy;scene.add(a.g);actors.set(e.enemy.id,a);
+      const a=actor(e.enemy.type);a.enemy=e.enemy;if(e.enemy.boss){a.g.scale.multiplyScalar(1.24);a.skin.color.setHex(0x57423c);}scene.add(a.g);actors.set(e.enemy.id,a);
       a.label=document.createElement('div');a.label.className='enemy-label';a.label.innerHTML='<i><b></b></i>';$('enemy-labels').append(a.label);
-      const reach=ENEMIES[e.enemy.type].reach;
+      const reach=e.enemy.reach;
       a.warning=new THREE.Mesh(new THREE.RingGeometry(reach-.08,reach,40),new THREE.MeshBasicMaterial({color:0xe84b26,transparent:true,opacity:.5,side:THREE.DoubleSide,depthWrite:false}));a.warning.rotation.x=-Math.PI/2;a.warning.visible=false;scene.add(a.warning);
     }
     if(e.type==='removeEnemy'){
@@ -396,16 +392,15 @@ function handleEvents(){
     if(e.type==='heal'){particles(game.player.x,.8,game.player.z,0x9fc27c,20,2);toast('Life restored');}
     if(e.type==='empty')toast('Out of ammunition. Swap to melee.');
     if(e.type==='tired')toast('Recover your stamina');
-    if(e.type==='pickup')toast(e.kind==='health'?'+16 life':'Ammunition recovered');
-    if(e.type==='wave')announce('HORDE '+String(e.wave).padStart(2,'0'),e.wave===1?'The dead have found you.':e.wave===2?'Something heavier moves among them.':'Stand. Strike. Survive.');
-    if(e.type==='clear')announce('THE HORDE FALLS','Life and ammunition replenished. Next horde in 7 seconds.',5);
-    if(e.type==='death')openMenu('dead');
+    if(e.type==='pickup')toast(e.kind==='health'?'+25 life':e.kind==='cache'?'Supplies recovered. Life restored.':'Ammunition recovered');
+    if(e.type==='death')openMenu('dead');if(e.type==='complete'){levelWorld.portal.visible=false;sound('clear');openMenu('complete');}
+    if(['message','objective','checkpoint'].includes(e.type)){toast(e.text);if(e.type!=='message')sound('heal');}
     if(e.type==='enemyAttack'&&e.enemyType==='monster'){particles(e.x,.1,e.z,0xa99267,24,5);if(Math.hypot(e.x-game.player.x,e.z-game.player.z)<7)shake=.14;}
   }
 }
 
 function animateActor(a,state,dt){
-  const isPlayer=a.type==='player',dead=state.dead,moving=isPlayer?state.speed>.1:state.state==='chase'&&!state.stagger;
+  const isPlayer=a.type==='player',dead=state.dead,moving=isPlayer?state.speed>.1:['chase','patrol','return'].includes(state.state)&&!state.stagger;
   const phase=isPlayer?walkTime:state.age*(a.type==='demon'?10:5)+state.phase;
   a.g.position.set(state.x,isPlayer&&state.dodge>0?.1:0,state.z);a.g.rotation.y=-state.yaw;
   a.g.rotation.x=dead?-(1-state.death/.85)*Math.PI/2:0;
@@ -437,9 +432,9 @@ function project(v){v.project(camera);return {x:(v.x*.5+.5)*innerWidth,y:(-v.y*.
 function updateVisuals(dt){
   walkTime+=dt*(game.player.speed>5?12:8);animateActor(playerModel,game.player,dt);
   for(const a of actors.values()){
-    animateActor(a,a.enemy,dt);const e=a.enemy,pos=project(new THREE.Vector3(e.x,e.height+.32,e.z));
-    a.warning.position.set(e.x,.025,e.z);a.warning.visible=!e.dead&&e.state==='windup';a.warning.material.opacity=.3+(1-e.timer/e.windup)*.65;
-    a.label.hidden=e.dead||!pos.visible||e.hp>=e.maxHp&&e.state!=='windup';
+    animateActor(a,a.enemy,dt);const e=a.enemy; a.g.visible=Math.hypot(e.x-game.player.x,e.z-game.player.z)<43;const pos=project(new THREE.Vector3(e.x,e.height+.32,e.z));
+    a.warning.position.set(e.x,.025,e.z);a.warning.visible=a.g.visible&&!e.dead&&e.state==='windup';a.warning.material.opacity=.3+(1-e.timer/e.windup)*.65;
+    a.label.hidden=e.dead||!a.g.visible||!pos.visible||e.hp>=e.maxHp&&e.state!=='windup';
     if(!a.label.hidden){a.label.style.left=pos.x+'px';a.label.style.top=pos.y+'px';a.label.querySelector('b').style.width=Math.max(0,e.hp/e.maxHp*100)+'%';}
   }
   for(const s of game.projectiles){
@@ -467,14 +462,13 @@ function updateVisuals(dt){
   }
   for(let i=damageLabels.length-1;i>=0;i--){const d=damageLabels[i];d.life-=dt;d.y+=dt*1.8;const pos=project(new THREE.Vector3(d.x,d.y,d.z));d.el.style.left=pos.x+'px';d.el.style.top=pos.y+'px';d.el.style.opacity=Math.max(0,d.life/.65);d.el.hidden=!pos.visible;if(d.life<=0){d.el.remove();damageLabels.splice(i,1);}}
   for(let i=0;i<torchFlames.length;i++){const f=torchFlames[i];f.scale.y=1+Math.sin(clock*12+i)*.15;f.rotation.y=clock*1.5;}
-  if(!started){for(let i=0;i<decoActors.length;i++){const a=decoActors[i];a.arms[0].rotation.x=Math.sin(clock*2+i)*.1-.25;a.arms[1].rotation.x=Math.sin(clock*2+i)*.1-.25;}}
   $('damage-screen').style.opacity=game.player.hitFlash*.95;
 }
 function updateHud(){
-  const p=game.player;$('wave').textContent=String(game.wave).padStart(2,'0');
-  const alive=game.enemies.filter(e=>!e.dead).length,remaining=alive+game.spawnQueue.length;
-  $('remaining').textContent=game.intermission>0?'NEXT HORDE · '+Math.ceil(game.intermission)+'s':remaining+' REMAINING';
-  $('wave-progress').style.width=(1-remaining/(game.waveTotal||1))*100+'%';
+  const p=game.player;$('area-name').textContent=zoneAt(p.x,p.z).name.toUpperCase();$('objective').textContent=game.objective();
+  const action=game.contextAction();$('interact-prompt').hidden=!action;$('interact-prompt').textContent=action?(isTouch?'TAP · ':'G · ')+action.label:'';
+  const boss=game.enemies.find(e=>e.boss&&!e.dead);$('boss-bar').hidden=!boss||Math.hypot(boss.x-p.x,boss.z-p.z)>21;if(boss)$('boss-health').style.width=Math.max(0,boss.hp/boss.maxHp*100)+'%';
+  updateLevelWorld();drawMap();
   $('health').textContent=Math.ceil(p.hp);$('health-fill').style.height=p.hp+'%';$('stamina').textContent=Math.floor(p.stamina);$('stamina-fill').style.height=p.stamina+'%';
   $('score').textContent=game.score.toLocaleString();$('kills').textContent=game.kills+' SLAIN';$('heals').textContent=p.heal;$('touch-heal').textContent='HEAL · '+p.heal;
   $('ammo').textContent=game.ranged==='sling'?'∞ STONES':p.ammo[game.ranged]+(game.ranged==='bow'?' ARROWS':' BOLTS');
@@ -482,7 +476,7 @@ function updateHud(){
   $('melee-hint').textContent=p.mode==='melee'?'EQUIPPED':'MELEE';
   $('touch-attack').textContent=p.mode==='melee'?'SLASH':'FIRE';$('touch-guard').textContent=p.mode==='melee'?'GUARD':'AIM';
   $('touch-heavy').disabled=p.mode==='ranged';
-  if(clock>toastUntil)$('toast').classList.remove('visible');if(clock>announceUntil)$('announcement').classList.remove('visible');
+  if(clock>toastUntil)$('toast').classList.remove('visible');
   // Fade only architecture directly between the isometric camera and the player.
   const obscuring=new Set();
   if(view==='isometric'){
@@ -490,11 +484,13 @@ function updateHud(){
     cameraRay.set(camera.position,dir.normalize());cameraRay.far=distance;
     for(const hit of cameraRay.intersectObjects(occluders,true)){let group=hit.object;while(group&&!group.userData.occluder)group=group.parent;if(group)obscuring.add(group);}
   }
-  for(const group of occluders){const fade=obscuring.has(group);group.traverse(m=>{if(m.isMesh){m.material.opacity=fade?.2:1;m.material.depthWrite=!fade;}});}
+  for(const group of occluders){if(!group.visible)continue;const fade=obscuring.has(group);group.traverse(m=>{if(m.isMesh){m.material.opacity=fade?.2:1;m.material.depthWrite=!fade;}});}
 }
 function frame(now){
   requestAnimationFrame(frame);let dt=Math.min((now-last)/1000||.016,.05);last=now;
-  if(game.mode==='paused'||game.mode==='dead'){renderer.render(scene,camera);return;}
+  // Interactions may finish the level between animation frames.
+  handleEvents();
+  if(['paused','dead','complete'].includes(game.mode)){renderer.render(scene,camera);return;}
   clock+=dt;shake*=Math.exp(-dt*13);flash=Math.max(0,flash-dt);
   if(hitPause>0){hitPause-=dt;dt*=.2;}
   if(game.mode==='playing'){
