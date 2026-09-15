@@ -36,8 +36,8 @@ const html=`
   <div class="touch-controls"><div class="joystick" id="joystick" aria-label="Movement joystick"><div class="stick" id="stick"></div></div><button class="small-button touch-heal" id="touch-heal">HEAL · 3</button><div class="touch-actions"><button class="touch-button heavy" id="touch-heavy">HEAVY</button><button class="touch-button guard" id="touch-guard">GUARD</button><button class="touch-button dodge" id="touch-dodge">DODGE</button><button class="touch-button attack" id="touch-attack">SLASH</button></div></div>
 </div>
 <div class="panel-screen" id="menu-screen"><section class="panel" aria-labelledby="menu-title">
-  <p class="eyebrow" id="menu-eyebrow">HOLLOW WAKE · HORDE SURVIVAL</p><h1 id="menu-title">SWARM<br>ATTACK</h1>
-  <p class="panel-description" id="menu-description">Zombies. Demons. Monsters.<br>Hold your ground. Keep your steel moving.</p>
+  <p class="eyebrow" id="menu-eyebrow">HOLLOW WAKE · HORDE SURVIVAL</p><h1 id="menu-title">SWARM ATTACK</h1>
+  <p class="panel-description" id="menu-description">Zombies. Demons. Monsters.</p>
   <div class="results" id="results" hidden></div>
   <div id="loadout"><div class="divider"></div><p class="section-label">MELEE WEAPON</p><div class="weapon-choices" id="melee-choices"></div><p class="weapon-detail" id="melee-detail"></p><p class="section-label">RANGED WEAPON</p><div class="weapon-choices ranged" id="ranged-choices"></div><p class="weapon-detail" id="ranged-detail"></p><p class="section-label">THIRD-PERSON CAMERA</p><div class="camera-choices"><button class="choice selected" data-view="isometric">Classic isometric</button><button class="choice" data-view="shoulder">Over the shoulder</button></div></div>
   <button class="primary" id="begin">ENTER THE RUINS</button>
@@ -287,8 +287,8 @@ function switchView(next){
 function toggleSound(){muted=!muted;if(master)master.gain.value=muted?0:.24;$('sound-button').textContent=muted?'MUTED':'SOUND';$('menu-sound').textContent=muted?'Sound off':'Sound on';}
 function openMenu(kind){
   menu=kind;clearInputs();unlock();$('menu-screen').hidden=false;
-  $('menu-title').innerHTML=kind==='dead'?'YOU HAVE<br>FALLEN':kind==='paused'?'TAKE A BREATH':'SWARM<br>ATTACK';
-  $('menu-description').innerHTML=kind==='dead'?'The horde claims another. Your next run starts here.':kind==='paused'?'The horde can wait. Change your weapons or camera.':'Zombies. Demons. Monsters.<br>Hold your ground. Keep your steel moving.';
+  $('menu-title').innerHTML=kind==='dead'?'YOU HAVE<br>FALLEN':kind==='paused'?'TAKE A BREATH':'SWARM ATTACK';
+  $('menu-description').innerHTML=kind==='dead'?'The horde claims another. Your next run starts here.':kind==='paused'?'The horde can wait. Change your weapons or camera.':'Zombies. Demons. Monsters.';
   $('menu-eyebrow').textContent=kind==='dead'?'HOLLOW WAKE · RUN ENDED':kind==='paused'?'HOLLOW WAKE · PAUSED':'HOLLOW WAKE · HORDE SURVIVAL';
   $('begin').textContent=kind==='dead'?'RISE AGAIN':kind==='paused'?'RETURN TO THE FIGHT':'ENTER THE RUINS';
   $('restart').hidden=kind!=='paused';$('results').hidden=kind!=='dead';
